@@ -2,16 +2,92 @@ local M = {}
 
 local buf = nil
 local win = nil
+local settings_file_path = nil
 
 -- Default configuration
 local config = {
   height = 15,
   position = 'bottom', -- 'bottom', 'top', 'left', 'right', 'float'
+  mcpserver_path = nil, -- Optional: custom path to mcpserver standalone.lua
 }
+
+-- Find mcpserver plugin path
+local function find_mcpserver_path()
+  -- Check if custom path is configured
+  if config.mcpserver_path then
+    -- Expand home directory if path starts with ~
+    local expanded_path = config.mcpserver_path:gsub("^~", vim.fn.expand("$HOME"))
+    if vim.fn.filereadable(expanded_path) == 1 then
+      return expanded_path
+    end
+  end
+
+  -- Check standard lazy.nvim plugins directory
+  local standard_path = vim.fn.stdpath('data') .. '/lazy/mcpserver.nvim/standalone.lua'
+  if vim.fn.filereadable(standard_path) == 1 then
+    return standard_path
+  end
+
+  error('Could not find mcpserver.nvim plugin. Please ensure it is installed correctly or specify mcpserver_path in the config.')
+end
+
+-- Create ephemeral settings file
+local function create_settings_file()
+  if settings_file_path then
+    return settings_file_path
+  end
+  
+  -- Create a temporary file
+  local temp_dir = vim.fn.stdpath('cache')
+  settings_file_path = temp_dir .. '/amp_settings_' .. vim.fn.getpid() .. '.json'
+  
+  -- Get nvim listen socket
+  local nvim_listen_socket = vim.v.servername
+  
+  -- Get path to mcpserver plugin
+  local plugin_path = find_mcpserver_path()
+  
+  -- Write the settings content
+  local settings_content = string.format([[{
+  "amp.mcpServers": {
+    "nvim": {
+      "command": "lua",
+      "args": [
+        "%s",
+        "%s"
+      ]
+    }
+  }
+}]], plugin_path, nvim_listen_socket)
+  
+  local file = io.open(settings_file_path, 'w')
+  if file then
+    file:write(settings_content)
+    file:close()
+  else
+    error('Failed to create settings file: ' .. settings_file_path)
+  end
+  
+  return settings_file_path
+end
+
+-- Clean up settings file
+local function cleanup_settings_file()
+  if settings_file_path and vim.fn.filereadable(settings_file_path) == 1 then
+    vim.fn.delete(settings_file_path)
+    settings_file_path = nil
+  end
+end
 
 -- Setup function for user configuration
 function M.setup(opts)
   config = vim.tbl_deep_extend('force', config, opts or {})
+  
+  -- Set up autocmd to clean up settings file on VimLeave
+  vim.api.nvim_create_autocmd('VimLeave', {
+    callback = cleanup_settings_file,
+    desc = 'Clean up amp settings file'
+  })
 end
 
 -- Create terminal in current window
@@ -68,5 +144,9 @@ function M.close()
     print('No terminal running.')
   end
 end
+
+-- Expose internal functions for plugin use
+M._create_settings_file = create_settings_file
+M._cleanup_settings_file = cleanup_settings_file
 
 return M
